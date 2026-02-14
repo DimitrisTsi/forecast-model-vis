@@ -17,7 +17,7 @@ body { margin:0; background:#0f0f0f; color:#ddd; font-family:system-ui; }
 
 #panel {
   position:absolute; top:20px; right:20px;
-  width:440px; max-height:90vh;
+  width:460px; max-height:90vh;
   overflow-y:auto;
   background:rgba(20,20,20,0.96);
   padding:16px; border-radius:8px;
@@ -49,6 +49,12 @@ canvas { margin-top:20px; }
   <option value="precipitation">Precipitation (mm)</option>
 </select>
 
+<strong>Comparison Mode</strong>
+<select id="modeSelect">
+  <option value="overlay">Overlay</option>
+  <option value="spread">Spread Envelope</option>
+</select>
+
 <div id="content" style="margin-top:10px;">
 Click on map.
 </div>
@@ -65,7 +71,6 @@ const map = new maplibregl.Map({
   center:[12,50],
   zoom:4
 });
-
 map.addControl(new maplibregl.NavigationControl());
 
 let lastLat=null;
@@ -80,23 +85,21 @@ const modelColors={
   ecmwf:"#b197fc"
 };
 
+/* ================= EVENT HANDLERS ================= */
 map.on('click',(e)=>{
   lastLat=e.lngLat.lat;
   lastLon=e.lngLat.lng;
   fetchAll();
 });
 
-document.getElementById("variableSelect")
-  .addEventListener("change",()=>{ if(lastLat) fetchAll(); });
-
-document.querySelectorAll("input[type=checkbox]")
-  .forEach(cb=>cb.addEventListener("change",()=>{ if(lastLat) fetchAll(); }));
+document.querySelectorAll("input[type=checkbox], #variableSelect, #modeSelect")
+  .forEach(el=>el.addEventListener("change",()=>{ if(lastLat) fetchAll(); }));
 
 /* ================= FETCH ================= */
-
 async function fetchAll(){
 
   const variable=document.getElementById("variableSelect").value;
+  const mode=document.getElementById("modeSelect").value;
 
   const selected=Array.from(
     document.querySelectorAll("input[type=checkbox]:checked")
@@ -109,27 +112,27 @@ async function fetchAll(){
 
   document.getElementById("content").innerHTML="Loading...";
 
-  const promises=selected.map(m=>fetchModel(m,variable));
-  const results=(await Promise.all(promises)).filter(r=>r!==null);
+  const results=(await Promise.all(
+    selected.map(m=>fetchModel(m,variable))
+  )).filter(r=>r!==null);
 
   if(results.length===0){
     document.getElementById("content").innerHTML="No valid data.";
     return;
   }
 
-  renderChart(results,variable);
+  renderChart(results,variable,mode);
 }
 
 /* ================= SINGLE MODEL ================= */
-
 async function fetchModel(modelKey,variable){
 
   let url;
 
   if(modelKey==="ecmwf"){
-    url=`https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&timezone=auto`;
+    url=`https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&timezone=UTC`;
   }else{
-    url=`https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&model=${modelKey}&timezone=auto`;
+    url=`https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&model=${modelKey}&timezone=UTC`;
   }
 
   try{
@@ -139,44 +142,35 @@ async function fetchModel(modelKey,variable){
 
     return {
       model:modelKey,
-      times:d.hourly.time.slice(0,48),
-      values:d.hourly[variable].slice(0,48)
+      times:d.hourly.time.map(t=>new Date(t).toISOString()),
+      values:d.hourly[variable]
     };
 
   }catch{ return null; }
 }
 
-/* ================= ALIGN TIME ================= */
+/* ================= TIME ALIGNMENT ================= */
+function alignModels(models){
 
-function buildUnifiedTimeAxis(models){
-
-  const allTimes=new Set();
-
+  // restrict to overlapping time window
+  const minEnd=Math.min(...models.map(m=>m.times.length));
   models.forEach(m=>{
-    m.times.forEach(t=>allTimes.add(t));
+    m.times=m.times.slice(0,minEnd);
+    m.values=m.values.slice(0,minEnd);
   });
 
-  return Array.from(allTimes).sort();
-}
-
-function alignModelData(unifiedTimes,model){
-
-  const mapObj={};
-  model.times.forEach((t,i)=>{ mapObj[t]=model.values[i]; });
-
-  return unifiedTimes.map(t=> mapObj[t] ?? null );
+  return models;
 }
 
 /* ================= RENDER ================= */
+function renderChart(models,variable,mode){
 
-function renderChart(models,variable){
+  models=alignModels(models);
 
-  const unifiedTimes=buildUnifiedTimeAxis(models);
-
-  const formattedLabels=unifiedTimes.map(t=>{
+  const labels=models[0].times.map(t=>{
     const d=new Date(t);
     return d.toLocaleString(undefined,{
-      day:'2-digit',
+      weekday:'short',
       hour:'2-digit'
     });
   });
@@ -185,44 +179,74 @@ function renderChart(models,variable){
 
   const ctx=document.getElementById("chart").getContext("2d");
 
-  const datasets=models.map(m=>({
-    label:m.model.toUpperCase(),
-    data:alignModelData(unifiedTimes,m),
-    borderColor:modelColors[m.model],
-    tension:0.3,
-    pointRadius:0,
-    fill:false
-  }));
+  if(mode==="overlay"){
 
-  chart=new Chart(ctx,{
-    type:'line',
-    data:{
-      labels:formattedLabels,
-      datasets:datasets
-    },
-    options:{
-      responsive:true,
-      scales:{
-        x:{
-          ticks:{ color:'#aaa', maxTicksLimit:8 }
-        },
-        y:{
-          ticks:{ color:'#aaa' }
-        }
+    const datasets=models.map(m=>({
+      label:m.model.toUpperCase(),
+      data:m.values,
+      borderColor:modelColors[m.model],
+      tension:0.3,
+      pointRadius:0,
+      fill:false
+    }));
+
+    chart=new Chart(ctx,{
+      type:'line',
+      data:{ labels,datasets },
+      options:chartOptions()
+    });
+
+  }else{
+
+    // Spread mode
+    const matrix=models.map(m=>m.values);
+
+    const minVals=matrix[0].map((_,i)=>Math.min(...matrix.map(row=>row[i])));
+    const maxVals=matrix[0].map((_,i)=>Math.max(...matrix.map(row=>row[i])));
+
+    chart=new Chart(ctx,{
+      type:'line',
+      data:{
+        labels,
+        datasets:[
+          {
+            label:"Max",
+            data:maxVals,
+            borderColor:"#999",
+            fill:false
+          },
+          {
+            label:"Min",
+            data:minVals,
+            borderColor:"#999",
+            fill:"-1",
+            backgroundColor:"rgba(150,150,150,0.2)"
+          }
+        ]
       },
-      plugins:{
-        legend:{
-          labels:{ color:'#ddd' }
-        }
-      }
-    }
-  });
+      options:chartOptions()
+    });
+  }
 
   document.getElementById("content").innerHTML=`
     <strong>Location:</strong><br>
     ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
-    Comparing ${models.length} model(s)
+    ${models.length} model(s)
   `;
+}
+
+/* ================= CHART OPTIONS ================= */
+function chartOptions(){
+  return{
+    responsive:true,
+    scales:{
+      x:{ ticks:{ color:'#aaa', maxTicksLimit:8 }},
+      y:{ ticks:{ color:'#aaa' }}
+    },
+    plugins:{
+      legend:{ labels:{ color:'#ddd' }}
+    }
+  };
 }
 
 </script>
