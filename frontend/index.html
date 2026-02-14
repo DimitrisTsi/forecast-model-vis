@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>forecast-model-vis</title>
+
+<link rel="icon" href="data:,">
+
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+
+<style>
+body {
+  margin: 0;
+  background: #0f0f0f;
+  color: #ddd;
+  font-family: system-ui, sans-serif;
+}
+
+#map {
+  width: 100vw;
+  height: 100vh;
+}
+
+#panel {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 320px;
+  background: rgba(20,20,20,0.95);
+  padding: 16px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+h2 {
+  margin: 0 0 10px 0;
+}
+
+small {
+  color: #999;
+}
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+
+<div id="panel">
+<h2>forecast-model-vis</h2>
+<div id="content">
+Click anywhere on the map.
+</div>
+</div>
+
+<script>
+/* ================================
+   MAP INIT
+================================ */
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center: [12, 50],
+  zoom: 4
+});
+
+map.addControl(new maplibregl.NavigationControl());
+
+/* ================================
+   CLICK HANDLER
+================================ */
+map.on('click', async (e) => {
+  const { lng, lat } = e.lngLat;
+  fetchForecast(lat, lng);
+});
+
+/* ================================
+   FORECAST FETCH (Open-Meteo GFS)
+================================ */
+async function fetchForecast(lat, lon) {
+
+  document.getElementById("content").innerHTML = "Loading forecast...";
+
+  const url = `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto`;
+
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+
+    displayForecast(data, lat, lon);
+
+  } catch (err) {
+    document.getElementById("content").innerHTML = "Error fetching forecast.";
+  }
+}
+
+/* ================================
+   DISPLAY BASIC INFO
+================================ */
+function displayForecast(data, lat, lon) {
+
+  const initTime = data.generationtime_ms ? "GFS model" : "Unknown";
+
+  const tempNow = data.hourly.temperature_2m[0];
+  const windNow = data.hourly.wind_speed_10m[0];
+  const precipNow = data.hourly.precipitation[0];
+
+  document.getElementById("content").innerHTML = `
+    <strong>Location:</strong><br>
+    ${lat.toFixed(2)}, ${lon.toFixed(2)}<br><br>
+
+    <strong>Model:</strong> GFS (Open-Meteo)<br><br>
+
+    <strong>Now:</strong><br>
+    Temperature: ${tempNow} °C<br>
+    Wind: ${windNow} km/h<br>
+    Precipitation: ${precipNow} mm<br><br>
+
+    <small>Click elsewhere to update.</small>
+  `;
+}
+</script>
+
+</body>
+</html>
