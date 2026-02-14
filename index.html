@@ -8,21 +8,18 @@
 
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
-
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
 body { margin:0; background:#0f0f0f; color:#ddd; font-family:system-ui; }
 #map { width:100vw; height:100vh; }
-
 #panel {
   position:absolute; top:20px; right:20px;
-  width:460px; max-height:90vh;
+  width:480px; max-height:90vh;
   overflow-y:auto;
   background:rgba(20,20,20,0.96);
   padding:16px; border-radius:8px;
 }
-
 label { display:block; margin-top:6px; }
 canvas { margin-top:20px; }
 </style>
@@ -34,7 +31,7 @@ canvas { margin-top:20px; }
 <div id="panel">
 <h2>forecast-model-vis</h2>
 
-<strong>Select Models</strong>
+<strong>Models</strong>
 <label><input type="checkbox" value="gfs" checked> GFS</label>
 <label><input type="checkbox" value="icon"> ICON</label>
 <label><input type="checkbox" value="ukmo"> UKMO</label>
@@ -49,14 +46,8 @@ canvas { margin-top:20px; }
   <option value="precipitation">Precipitation (mm)</option>
 </select>
 
-<strong>Comparison Mode</strong>
-<select id="modeSelect">
-  <option value="overlay">Overlay</option>
-  <option value="spread">Spread Envelope</option>
-</select>
-
 <div id="content" style="margin-top:10px;">
-Click on map.
+Click map.
 </div>
 
 <canvas id="chart"></canvas>
@@ -73,62 +64,57 @@ const map = new maplibregl.Map({
 });
 map.addControl(new maplibregl.NavigationControl());
 
-let lastLat=null;
-let lastLon=null;
-let chart=null;
+let lastLat=null,lastLon=null,chart=null;
 
-const modelColors={
-  gfs:"#ff6b6b",
-  icon:"#4dabf7",
-  ukmo:"#ffd43b",
-  meteofrance:"#69db7c",
-  ecmwf:"#b197fc"
+const modelStyles={
+  gfs:{ color:"#ff6b6b", dash:[] },
+  icon:{ color:"#4dabf7", dash:[6,4] },
+  ukmo:{ color:"#ffd43b", dash:[2,4] },
+  meteofrance:{ color:"#69db7c", dash:[10,4] },
+  ecmwf:{ color:"#b197fc", dash:[1,3] }
 };
 
-/* ================= EVENT HANDLERS ================= */
 map.on('click',(e)=>{
   lastLat=e.lngLat.lat;
   lastLon=e.lngLat.lng;
   fetchAll();
 });
 
-document.querySelectorAll("input[type=checkbox], #variableSelect, #modeSelect")
+document.querySelectorAll("input,select")
   .forEach(el=>el.addEventListener("change",()=>{ if(lastLat) fetchAll(); }));
 
 /* ================= FETCH ================= */
+
 async function fetchAll(){
 
   const variable=document.getElementById("variableSelect").value;
-  const mode=document.getElementById("modeSelect").value;
 
   const selected=Array.from(
     document.querySelectorAll("input[type=checkbox]:checked")
   ).map(cb=>cb.value);
 
   if(selected.length===0){
-    document.getElementById("content").innerHTML="Select at least one model.";
+    document.getElementById("content").innerHTML="Select model.";
     return;
   }
 
   document.getElementById("content").innerHTML="Loading...";
 
-  const results=(await Promise.all(
+  const models=(await Promise.all(
     selected.map(m=>fetchModel(m,variable))
   )).filter(r=>r!==null);
 
-  if(results.length===0){
-    document.getElementById("content").innerHTML="No valid data.";
+  if(models.length===0){
+    document.getElementById("content").innerHTML="No data.";
     return;
   }
 
-  renderChart(results,variable,mode);
+  render(models,variable);
 }
 
-/* ================= SINGLE MODEL ================= */
 async function fetchModel(modelKey,variable){
 
   let url;
-
   if(modelKey==="ecmwf"){
     url=`https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&timezone=UTC`;
   }else{
@@ -139,35 +125,72 @@ async function fetchModel(modelKey,variable){
     const r=await fetch(url);
     if(!r.ok) return null;
     const d=await r.json();
-
     return {
       model:modelKey,
-      times:d.hourly.time.map(t=>new Date(t).toISOString()),
+      times:d.hourly.time.map(t=>new Date(t).getTime()),
       values:d.hourly[variable]
     };
-
-  }catch{ return null; }
+  }catch{return null;}
 }
 
-/* ================= TIME ALIGNMENT ================= */
-function alignModels(models){
+/* ================= INTERPOLATION ================= */
 
-  // restrict to overlapping time window
-  const minEnd=Math.min(...models.map(m=>m.times.length));
-  models.forEach(m=>{
-    m.times=m.times.slice(0,minEnd);
-    m.values=m.values.slice(0,minEnd);
-  });
+function buildTargetGrid(models){
 
-  return models;
+  const start=Math.max(...models.map(m=>m.times[0]));
+  const end=Math.min(...models.map(m=>m.times[m.times.length-1]));
+
+  const hours=[];
+  for(let t=start;t<=end;t+=3600*1000){
+    hours.push(t);
+  }
+  return hours;
+}
+
+function interpolate(model,targetTimes){
+
+  const result=[];
+
+  for(const t of targetTimes){
+
+    const idx=model.times.findIndex(x=>x>=t);
+
+    if(idx===-1){
+      result.push(null);
+      continue;
+    }
+
+    if(model.times[idx]===t){
+      result.push(model.values[idx]);
+    }else if(idx>0){
+
+      const t1=model.times[idx-1];
+      const t2=model.times[idx];
+      const v1=model.values[idx-1];
+      const v2=model.values[idx];
+
+      const ratio=(t-t1)/(t2-t1);
+      result.push(v1+(v2-v1)*ratio);
+
+    }else{
+      result.push(null);
+    }
+  }
+  return result;
 }
 
 /* ================= RENDER ================= */
-function renderChart(models,variable,mode){
 
-  models=alignModels(models);
+function render(models,variable){
 
-  const labels=models[0].times.map(t=>{
+  const targetTimes=buildTargetGrid(models);
+
+  const aligned=models.map(m=>({
+    model:m.model,
+    values:interpolate(m,targetTimes)
+  }));
+
+  const labels=targetTimes.map(t=>{
     const d=new Date(t);
     return d.toLocaleString(undefined,{
       weekday:'short',
@@ -179,74 +202,39 @@ function renderChart(models,variable,mode){
 
   const ctx=document.getElementById("chart").getContext("2d");
 
-  if(mode==="overlay"){
+  const datasets=aligned.map(m=>({
+    label:m.model.toUpperCase(),
+    data:m.values,
+    borderColor:modelStyles[m.model].color,
+    borderDash:modelStyles[m.model].dash,
+    borderWidth:2,
+    tension:0.3,
+    pointRadius:0,
+    pointHoverRadius:4,
+    fill:false
+  }));
 
-    const datasets=models.map(m=>({
-      label:m.model.toUpperCase(),
-      data:m.values,
-      borderColor:modelColors[m.model],
-      tension:0.3,
-      pointRadius:0,
-      fill:false
-    }));
-
-    chart=new Chart(ctx,{
-      type:'line',
-      data:{ labels,datasets },
-      options:chartOptions()
-    });
-
-  }else{
-
-    // Spread mode
-    const matrix=models.map(m=>m.values);
-
-    const minVals=matrix[0].map((_,i)=>Math.min(...matrix.map(row=>row[i])));
-    const maxVals=matrix[0].map((_,i)=>Math.max(...matrix.map(row=>row[i])));
-
-    chart=new Chart(ctx,{
-      type:'line',
-      data:{
-        labels,
-        datasets:[
-          {
-            label:"Max",
-            data:maxVals,
-            borderColor:"#999",
-            fill:false
-          },
-          {
-            label:"Min",
-            data:minVals,
-            borderColor:"#999",
-            fill:"-1",
-            backgroundColor:"rgba(150,150,150,0.2)"
-          }
-        ]
+  chart=new Chart(ctx,{
+    type:'line',
+    data:{ labels,datasets },
+    options:{
+      responsive:true,
+      interaction:{ mode:'index', intersect:false },
+      scales:{
+        x:{ ticks:{ color:'#aaa', maxTicksLimit:8 }},
+        y:{ ticks:{ color:'#aaa' }}
       },
-      options:chartOptions()
-    });
-  }
+      plugins:{
+        legend:{ labels:{ color:'#ddd' }}
+      }
+    }
+  });
 
   document.getElementById("content").innerHTML=`
     <strong>Location:</strong><br>
     ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
     ${models.length} model(s)
   `;
-}
-
-/* ================= CHART OPTIONS ================= */
-function chartOptions(){
-  return{
-    responsive:true,
-    scales:{
-      x:{ ticks:{ color:'#aaa', maxTicksLimit:8 }},
-      y:{ ticks:{ color:'#aaa' }}
-    },
-    plugins:{
-      legend:{ labels:{ color:'#ddd' }}
-    }
-  };
 }
 
 </script>
