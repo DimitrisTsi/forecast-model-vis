@@ -8,20 +8,30 @@
 
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 
 <style>
 body { margin:0; background:#0f0f0f; color:#ddd; font-family:system-ui; }
 #map { width:100vw; height:100vh; }
 #panel {
   position:absolute; top:20px; right:20px;
-  width:480px; max-height:90vh;
+  width:500px; max-height:90vh;
   overflow-y:auto;
   background:rgba(20,20,20,0.96);
   padding:16px; border-radius:8px;
 }
 label { display:block; margin-top:6px; }
 canvas { margin-top:20px; }
+button {
+  margin-top:10px;
+  padding:6px 10px;
+  background:#222;
+  color:#ddd;
+  border:1px solid #444;
+  cursor:pointer;
+}
 </style>
 </head>
 <body>
@@ -44,7 +54,12 @@ canvas { margin-top:20px; }
 <select id="variableSelect">
   <option value="temperature_2m">Temperature (°C)</option>
   <option value="precipitation">Precipitation (mm)</option>
+  <option value="wind_speed_10m">Wind Speed 10m (km/h)</option>
+  <option value="surface_pressure">Surface Pressure (hPa)</option>
+  <option value="relative_humidity_2m">Relative Humidity (%)</option>
 </select>
+
+<button onclick="resetZoom()">Reset Zoom</button>
 
 <div id="content" style="margin-top:10px;">
 Click map.
@@ -125,21 +140,23 @@ async function fetchModel(modelKey,variable){
     const r=await fetch(url);
     if(!r.ok) return null;
     const d=await r.json();
+
+    if(!d.hourly[variable]) return null;
+
     return {
       model:modelKey,
       times:d.hourly.time.map(t=>new Date(t).getTime()),
       values:d.hourly[variable]
     };
+
   }catch{return null;}
 }
 
 /* ================= INTERPOLATION ================= */
 
 function buildTargetGrid(models){
-
   const start=Math.max(...models.map(m=>m.times[0]));
   const end=Math.min(...models.map(m=>m.times[m.times.length-1]));
-
   const hours=[];
   for(let t=start;t<=end;t+=3600*1000){
     hours.push(t);
@@ -150,28 +167,21 @@ function buildTargetGrid(models){
 function interpolate(model,targetTimes){
 
   const result=[];
-
   for(const t of targetTimes){
 
     const idx=model.times.findIndex(x=>x>=t);
 
-    if(idx===-1){
-      result.push(null);
-      continue;
-    }
+    if(idx===-1){ result.push(null); continue; }
 
     if(model.times[idx]===t){
       result.push(model.values[idx]);
     }else if(idx>0){
-
       const t1=model.times[idx-1];
       const t2=model.times[idx];
       const v1=model.values[idx-1];
       const v2=model.values[idx];
-
       const ratio=(t-t1)/(t2-t1);
       result.push(v1+(v2-v1)*ratio);
-
     }else{
       result.push(null);
     }
@@ -199,7 +209,6 @@ function render(models,variable){
   });
 
   if(chart) chart.destroy();
-
   const ctx=document.getElementById("chart").getContext("2d");
 
   const datasets=aligned.map(m=>({
@@ -225,7 +234,18 @@ function render(models,variable){
         y:{ ticks:{ color:'#aaa' }}
       },
       plugins:{
-        legend:{ labels:{ color:'#ddd' }}
+        legend:{ labels:{ color:'#ddd' }},
+        zoom:{
+          zoom:{
+            wheel:{ enabled:true },
+            pinch:{ enabled:true },
+            mode:'x'
+          },
+          pan:{
+            enabled:true,
+            mode:'x'
+          }
+        }
       }
     }
   });
@@ -235,6 +255,10 @@ function render(models,variable){
     ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
     ${models.length} model(s)
   `;
+}
+
+function resetZoom(){
+  if(chart) chart.resetZoom();
 }
 
 </script>
