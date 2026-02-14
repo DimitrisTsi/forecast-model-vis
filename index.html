@@ -30,7 +30,7 @@ body {
   position: absolute;
   top: 20px;
   right: 20px;
-  width: 400px;
+  width: 420px;
   max-height: 90vh;
   overflow-y: auto;
   background: rgba(20,20,20,0.96);
@@ -39,22 +39,11 @@ body {
   font-size: 14px;
 }
 
-h2 {
-  margin: 0 0 12px 0;
-}
+h2 { margin: 0 0 12px 0; }
 
-select {
-  width: 100%;
-  padding: 6px;
-  margin-bottom: 12px;
-  background: #222;
-  color: #ddd;
-  border: 1px solid #444;
-}
+label { display:block; margin-top:8px; }
 
-canvas {
-  margin-top: 20px;
-}
+canvas { margin-top: 20px; }
 </style>
 </head>
 
@@ -65,171 +54,173 @@ canvas {
 <div id="panel">
   <h2>forecast-model-vis</h2>
 
-  <label>Model</label>
-  <select id="modelSelect">
-    <option value="gfs">GFS (~0.25°)</option>
-    <option value="icon">ICON (~0.25°)</option>
-  </select>
+  <strong>Select Models</strong>
 
-  <div id="content">
+  <label><input type="checkbox" value="gfs" checked> GFS</label>
+  <label><input type="checkbox" value="icon"> ICON</label>
+  <label><input type="checkbox" value="ukmo"> UKMO</label>
+  <label><input type="checkbox" value="meteofrance"> MeteoFrance</label>
+  <label><input type="checkbox" value="ecmwf"> ECMWF (IFS 9km)</label>
+
+  <div id="content" style="margin-top:12px;">
     Click anywhere on the map.
   </div>
 
   <canvas id="tempChart"></canvas>
-  <canvas id="precipChart"></canvas>
 </div>
 
 <script>
-/* ===================================
+
+/* ================================
    MAP INIT
-=================================== */
+================================ */
 const map = new maplibregl.Map({
   container: 'map',
-  style: 'https://demotiles.maplibre.org/style.json',
+  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
   center: [12, 50],
   zoom: 4
 });
 
 map.addControl(new maplibregl.NavigationControl());
 
-/* ===================================
+/* ================================
    GLOBAL STATE
-=================================== */
+================================ */
 let tempChart = null;
-let precipChart = null;
 let lastLat = null;
 let lastLon = null;
 
-/* ===================================
-   MODEL CONFIG
-=================================== */
-const modelConfig = {
-  gfs: {
-    endpoint: "https://api.open-meteo.com/v1/gfs",
-    label: "GFS",
-    resolution: "~0.25°"
-  },
-  icon: {
-    endpoint: "https://api.open-meteo.com/v1/icon",
-    label: "ICON",
-    resolution: "~0.25°"
-  }
+/* ================================
+   MODEL COLORS
+================================ */
+const modelColors = {
+  gfs: "#ff6b6b",
+  icon: "#4dabf7",
+  ukmo: "#ffd43b",
+  meteofrance: "#69db7c",
+  ecmwf: "#b197fc"
 };
 
-/* ===================================
+/* ================================
    MAP CLICK
-=================================== */
+================================ */
 map.on('click', (e) => {
   const { lng, lat } = e.lngLat;
   lastLat = lat;
   lastLon = lng;
-  fetchForecast();
+  fetchAllSelectedModels();
 });
 
-/* ===================================
-   MODEL SWITCH HANDLER
-=================================== */
-document.getElementById("modelSelect").addEventListener("change", () => {
-  if (lastLat && lastLon) {
-    fetchForecast();
+/* ================================
+   FETCH ALL SELECTED MODELS
+================================ */
+async function fetchAllSelectedModels() {
+
+  const selected = Array.from(
+    document.querySelectorAll("input[type=checkbox]:checked")
+  ).map(cb => cb.value);
+
+  if (selected.length === 0) {
+    document.getElementById("content").innerHTML = "Select at least one model.";
+    return;
   }
-});
 
-/* ===================================
-   FETCH FORECAST
-=================================== */
-async function fetchForecast() {
+  document.getElementById("content").innerHTML = "Loading forecasts...";
 
-  const modelKey = document.getElementById("modelSelect").value;
-  const model = modelConfig[modelKey];
+  const fetchPromises = selected.map(model => fetchModel(model));
 
-  document.getElementById("content").innerHTML = "Loading forecast...";
+  try {
+    const results = await Promise.all(fetchPromises);
+    renderComparison(results.filter(r => r !== null));
+  } catch (err) {
+    document.getElementById("content").innerHTML = "Error fetching data.";
+  }
+}
 
-  const url = `${model.endpoint}?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto`;
+/* ================================
+   FETCH SINGLE MODEL
+================================ */
+async function fetchModel(modelKey) {
+
+  let url;
+
+  if (modelKey === "ecmwf") {
+    url = `https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m&timezone=auto`;
+  } else {
+    url = `https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m&model=${modelKey}&timezone=auto`;
+  }
 
   try {
     const response = await fetch(url);
+    if (!response.ok) return null;
+
     const data = await response.json();
-    displayForecast(data, model);
-  } catch (err) {
-    document.getElementById("content").innerHTML = "Error fetching forecast.";
+
+    return {
+      model: modelKey.toUpperCase(),
+      times: data.hourly.time.slice(0, 48),
+      temps: data.hourly.temperature_2m.slice(0, 48)
+    };
+
+  } catch {
+    return null;
   }
 }
 
-/* ===================================
-   DISPLAY FORECAST
-=================================== */
-function displayForecast(data, model) {
+/* ================================
+   RENDER COMPARISON
+================================ */
+function renderComparison(modelDataArray) {
 
-  const times = data.hourly.time.slice(0, 48);
-  const temps = data.hourly.temperature_2m.slice(0, 48);
-  const precip = data.hourly.precipitation.slice(0, 48);
+  if (modelDataArray.length === 0) {
+    document.getElementById("content").innerHTML = "No valid model data.";
+    return;
+  }
 
   document.getElementById("content").innerHTML = `
     <strong>Location:</strong><br>
-    ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br><br>
-    <strong>Model:</strong> ${model.label}<br>
-    <strong>Resolution:</strong> ${model.resolution}<br>
-    <strong>Window:</strong> Next 48h
+    ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
+    Comparing ${modelDataArray.length} model(s)
   `;
 
   if (tempChart) tempChart.destroy();
-  if (precipChart) precipChart.destroy();
 
-  const tempCtx = document.getElementById('tempChart').getContext('2d');
-  const precipCtx = document.getElementById('precipChart').getContext('2d');
+  const ctx = document.getElementById('tempChart').getContext('2d');
 
-  tempChart = new Chart(tempCtx, {
+  const datasets = modelDataArray.map(model => ({
+    label: model.model,
+    data: model.temps,
+    borderColor: modelColors[model.model.toLowerCase()],
+    tension: 0.3,
+    pointRadius: 0,
+    fill: false
+  }));
+
+  tempChart = new Chart(ctx, {
     type: 'line',
     data: {
-      labels: times,
-      datasets: [{
-        label: `${model.label} Temperature (°C)`,
-        data: temps,
-        borderColor: '#ff6b6b',
-        backgroundColor: 'rgba(255,107,107,0.15)',
-        tension: 0.3,
-        pointRadius: 0
-      }]
+      labels: modelDataArray[0].times,
+      datasets: datasets
     },
-    options: chartOptions()
-  });
-
-  precipChart = new Chart(precipCtx, {
-    type: 'bar',
-    data: {
-      labels: times,
-      datasets: [{
-        label: `${model.label} Precipitation (mm)`,
-        data: precip,
-        backgroundColor: '#4dabf7'
-      }]
-    },
-    options: chartOptions()
-  });
-}
-
-/* ===================================
-   SHARED CHART OPTIONS
-=================================== */
-function chartOptions() {
-  return {
-    responsive: true,
-    scales: {
-      x: {
-        ticks: { color: '#aaa', maxTicksLimit: 8 }
+    options: {
+      responsive: true,
+      scales: {
+        x: {
+          ticks: { color: '#aaa', maxTicksLimit: 8 }
+        },
+        y: {
+          ticks: { color: '#aaa' }
+        }
       },
-      y: {
-        ticks: { color: '#aaa' }
-      }
-    },
-    plugins: {
-      legend: {
-        labels: { color: '#ddd' }
+      plugins: {
+        legend: {
+          labels: { color: '#ddd' }
+        }
       }
     }
-  };
+  });
 }
+
 </script>
 
 </body>
