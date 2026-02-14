@@ -6,222 +6,225 @@
 
 <link rel="icon" href="data:,">
 
-<!-- MapLibre -->
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
 
-<!-- Chart.js -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
 <style>
-body {
-  margin: 0;
-  background: #0f0f0f;
-  color: #ddd;
-  font-family: system-ui, sans-serif;
-}
-
-#map {
-  width: 100vw;
-  height: 100vh;
-}
+body { margin:0; background:#0f0f0f; color:#ddd; font-family:system-ui; }
+#map { width:100vw; height:100vh; }
 
 #panel {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  width: 420px;
-  max-height: 90vh;
-  overflow-y: auto;
-  background: rgba(20,20,20,0.96);
-  padding: 16px;
-  border-radius: 8px;
-  font-size: 14px;
+  position:absolute; top:20px; right:20px;
+  width:440px; max-height:90vh;
+  overflow-y:auto;
+  background:rgba(20,20,20,0.96);
+  padding:16px; border-radius:8px;
 }
 
-h2 { margin: 0 0 12px 0; }
-
-label { display:block; margin-top:8px; }
-
-canvas { margin-top: 20px; }
+label { display:block; margin-top:6px; }
+canvas { margin-top:20px; }
 </style>
 </head>
-
 <body>
 
 <div id="map"></div>
 
 <div id="panel">
-  <h2>forecast-model-vis</h2>
+<h2>forecast-model-vis</h2>
 
-  <strong>Select Models</strong>
+<strong>Select Models</strong>
+<label><input type="checkbox" value="gfs" checked> GFS</label>
+<label><input type="checkbox" value="icon"> ICON</label>
+<label><input type="checkbox" value="ukmo"> UKMO</label>
+<label><input type="checkbox" value="meteofrance"> MeteoFrance</label>
+<label><input type="checkbox" value="ecmwf"> ECMWF</label>
 
-  <label><input type="checkbox" value="gfs" checked> GFS</label>
-  <label><input type="checkbox" value="icon"> ICON</label>
-  <label><input type="checkbox" value="ukmo"> UKMO</label>
-  <label><input type="checkbox" value="meteofrance"> MeteoFrance</label>
-  <label><input type="checkbox" value="ecmwf"> ECMWF (IFS 9km)</label>
+<br>
 
-  <div id="content" style="margin-top:12px;">
-    Click anywhere on the map.
-  </div>
+<strong>Variable</strong>
+<select id="variableSelect">
+  <option value="temperature_2m">Temperature (°C)</option>
+  <option value="precipitation">Precipitation (mm)</option>
+</select>
 
-  <canvas id="tempChart"></canvas>
+<div id="content" style="margin-top:10px;">
+Click on map.
+</div>
+
+<canvas id="chart"></canvas>
 </div>
 
 <script>
 
-/* ================================
-   MAP INIT
-================================ */
+/* ================= MAP ================= */
 const map = new maplibregl.Map({
-  container: 'map',
-  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  center: [12, 50],
-  zoom: 4
+  container:'map',
+  style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  center:[12,50],
+  zoom:4
 });
 
 map.addControl(new maplibregl.NavigationControl());
 
-/* ================================
-   GLOBAL STATE
-================================ */
-let tempChart = null;
-let lastLat = null;
-let lastLon = null;
+let lastLat=null;
+let lastLon=null;
+let chart=null;
 
-/* ================================
-   MODEL COLORS
-================================ */
-const modelColors = {
-  gfs: "#ff6b6b",
-  icon: "#4dabf7",
-  ukmo: "#ffd43b",
-  meteofrance: "#69db7c",
-  ecmwf: "#b197fc"
+const modelColors={
+  gfs:"#ff6b6b",
+  icon:"#4dabf7",
+  ukmo:"#ffd43b",
+  meteofrance:"#69db7c",
+  ecmwf:"#b197fc"
 };
 
-/* ================================
-   MAP CLICK
-================================ */
-map.on('click', (e) => {
-  const { lng, lat } = e.lngLat;
-  lastLat = lat;
-  lastLon = lng;
-  fetchAllSelectedModels();
+map.on('click',(e)=>{
+  lastLat=e.lngLat.lat;
+  lastLon=e.lngLat.lng;
+  fetchAll();
 });
 
-/* ================================
-   FETCH ALL SELECTED MODELS
-================================ */
-async function fetchAllSelectedModels() {
+document.getElementById("variableSelect")
+  .addEventListener("change",()=>{ if(lastLat) fetchAll(); });
 
-  const selected = Array.from(
+document.querySelectorAll("input[type=checkbox]")
+  .forEach(cb=>cb.addEventListener("change",()=>{ if(lastLat) fetchAll(); }));
+
+/* ================= FETCH ================= */
+
+async function fetchAll(){
+
+  const variable=document.getElementById("variableSelect").value;
+
+  const selected=Array.from(
     document.querySelectorAll("input[type=checkbox]:checked")
-  ).map(cb => cb.value);
+  ).map(cb=>cb.value);
 
-  if (selected.length === 0) {
-    document.getElementById("content").innerHTML = "Select at least one model.";
+  if(selected.length===0){
+    document.getElementById("content").innerHTML="Select at least one model.";
     return;
   }
 
-  document.getElementById("content").innerHTML = "Loading forecasts...";
+  document.getElementById("content").innerHTML="Loading...";
 
-  const fetchPromises = selected.map(model => fetchModel(model));
+  const promises=selected.map(m=>fetchModel(m,variable));
+  const results=(await Promise.all(promises)).filter(r=>r!==null);
 
-  try {
-    const results = await Promise.all(fetchPromises);
-    renderComparison(results.filter(r => r !== null));
-  } catch (err) {
-    document.getElementById("content").innerHTML = "Error fetching data.";
+  if(results.length===0){
+    document.getElementById("content").innerHTML="No valid data.";
+    return;
   }
+
+  renderChart(results,variable);
 }
 
-/* ================================
-   FETCH SINGLE MODEL
-================================ */
-async function fetchModel(modelKey) {
+/* ================= SINGLE MODEL ================= */
+
+async function fetchModel(modelKey,variable){
 
   let url;
 
-  if (modelKey === "ecmwf") {
-    url = `https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m&timezone=auto`;
-  } else {
-    url = `https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m&model=${modelKey}&timezone=auto`;
+  if(modelKey==="ecmwf"){
+    url=`https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&timezone=auto`;
+  }else{
+    url=`https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&model=${modelKey}&timezone=auto`;
   }
 
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return null;
-
-    const data = await response.json();
+  try{
+    const r=await fetch(url);
+    if(!r.ok) return null;
+    const d=await r.json();
 
     return {
-      model: modelKey.toUpperCase(),
-      times: data.hourly.time.slice(0, 48),
-      temps: data.hourly.temperature_2m.slice(0, 48)
+      model:modelKey,
+      times:d.hourly.time.slice(0,48),
+      values:d.hourly[variable].slice(0,48)
     };
 
-  } catch {
-    return null;
-  }
+  }catch{ return null; }
 }
 
-/* ================================
-   RENDER COMPARISON
-================================ */
-function renderComparison(modelDataArray) {
+/* ================= ALIGN TIME ================= */
 
-  if (modelDataArray.length === 0) {
-    document.getElementById("content").innerHTML = "No valid model data.";
-    return;
-  }
+function buildUnifiedTimeAxis(models){
 
-  document.getElementById("content").innerHTML = `
-    <strong>Location:</strong><br>
-    ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
-    Comparing ${modelDataArray.length} model(s)
-  `;
+  const allTimes=new Set();
 
-  if (tempChart) tempChart.destroy();
+  models.forEach(m=>{
+    m.times.forEach(t=>allTimes.add(t));
+  });
 
-  const ctx = document.getElementById('tempChart').getContext('2d');
+  return Array.from(allTimes).sort();
+}
 
-  const datasets = modelDataArray.map(model => ({
-    label: model.model,
-    data: model.temps,
-    borderColor: modelColors[model.model.toLowerCase()],
-    tension: 0.3,
-    pointRadius: 0,
-    fill: false
+function alignModelData(unifiedTimes,model){
+
+  const mapObj={};
+  model.times.forEach((t,i)=>{ mapObj[t]=model.values[i]; });
+
+  return unifiedTimes.map(t=> mapObj[t] ?? null );
+}
+
+/* ================= RENDER ================= */
+
+function renderChart(models,variable){
+
+  const unifiedTimes=buildUnifiedTimeAxis(models);
+
+  const formattedLabels=unifiedTimes.map(t=>{
+    const d=new Date(t);
+    return d.toLocaleString(undefined,{
+      day:'2-digit',
+      hour:'2-digit'
+    });
+  });
+
+  if(chart) chart.destroy();
+
+  const ctx=document.getElementById("chart").getContext("2d");
+
+  const datasets=models.map(m=>({
+    label:m.model.toUpperCase(),
+    data:alignModelData(unifiedTimes,m),
+    borderColor:modelColors[m.model],
+    tension:0.3,
+    pointRadius:0,
+    fill:false
   }));
 
-  tempChart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: modelDataArray[0].times,
-      datasets: datasets
+  chart=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:formattedLabels,
+      datasets:datasets
     },
-    options: {
-      responsive: true,
-      scales: {
-        x: {
-          ticks: { color: '#aaa', maxTicksLimit: 8 }
+    options:{
+      responsive:true,
+      scales:{
+        x:{
+          ticks:{ color:'#aaa', maxTicksLimit:8 }
         },
-        y: {
-          ticks: { color: '#aaa' }
+        y:{
+          ticks:{ color:'#aaa' }
         }
       },
-      plugins: {
-        legend: {
-          labels: { color: '#ddd' }
+      plugins:{
+        legend:{
+          labels:{ color:'#ddd' }
         }
       }
     }
   });
+
+  document.getElementById("content").innerHTML=`
+    <strong>Location:</strong><br>
+    ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br>
+    Comparing ${models.length} model(s)
+  `;
 }
 
 </script>
-
 </body>
 </html>
