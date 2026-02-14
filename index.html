@@ -30,7 +30,7 @@ body {
   position: absolute;
   top: 20px;
   right: 20px;
-  width: 380px;
+  width: 400px;
   max-height: 90vh;
   overflow-y: auto;
   background: rgba(20,20,20,0.96);
@@ -43,8 +43,13 @@ h2 {
   margin: 0 0 12px 0;
 }
 
-small {
-  color: #999;
+select {
+  width: 100%;
+  padding: 6px;
+  margin-bottom: 12px;
+  background: #222;
+  color: #ddd;
+  border: 1px solid #444;
 }
 
 canvas {
@@ -59,6 +64,13 @@ canvas {
 
 <div id="panel">
   <h2>forecast-model-vis</h2>
+
+  <label>Model</label>
+  <select id="modelSelect">
+    <option value="gfs">GFS (~0.25°)</option>
+    <option value="icon">ICON (~0.25°)</option>
+  </select>
+
   <div id="content">
     Click anywhere on the map.
   </div>
@@ -68,54 +80,86 @@ canvas {
 </div>
 
 <script>
-/* ================================
+/* ===================================
    MAP INIT
-================================ */
+=================================== */
 const map = new maplibregl.Map({
   container: 'map',
-  style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+  style: 'https://demotiles.maplibre.org/style.json',
   center: [12, 50],
   zoom: 4
 });
 
 map.addControl(new maplibregl.NavigationControl());
 
-/* ================================
-   GLOBAL CHART REFERENCES
-================================ */
+/* ===================================
+   GLOBAL STATE
+=================================== */
 let tempChart = null;
 let precipChart = null;
+let lastLat = null;
+let lastLon = null;
 
-/* ================================
-   MAP CLICK HANDLER
-================================ */
-map.on('click', async (e) => {
+/* ===================================
+   MODEL CONFIG
+=================================== */
+const modelConfig = {
+  gfs: {
+    endpoint: "https://api.open-meteo.com/v1/gfs",
+    label: "GFS",
+    resolution: "~0.25°"
+  },
+  icon: {
+    endpoint: "https://api.open-meteo.com/v1/icon",
+    label: "ICON",
+    resolution: "~0.25°"
+  }
+};
+
+/* ===================================
+   MAP CLICK
+=================================== */
+map.on('click', (e) => {
   const { lng, lat } = e.lngLat;
-  fetchForecast(lat, lng);
+  lastLat = lat;
+  lastLon = lng;
+  fetchForecast();
 });
 
-/* ================================
-   FETCH FORECAST (GFS - Open Meteo)
-================================ */
-async function fetchForecast(lat, lon) {
+/* ===================================
+   MODEL SWITCH HANDLER
+=================================== */
+document.getElementById("modelSelect").addEventListener("change", () => {
+  if (lastLat && lastLon) {
+    fetchForecast();
+  }
+});
+
+/* ===================================
+   FETCH FORECAST
+=================================== */
+async function fetchForecast() {
+
+  const modelKey = document.getElementById("modelSelect").value;
+  const model = modelConfig[modelKey];
 
   document.getElementById("content").innerHTML = "Loading forecast...";
 
-  const url = `https://api.open-meteo.com/v1/gfs?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto`;
+  const url = `${model.endpoint}?latitude=${lastLat}&longitude=${lastLon}&hourly=temperature_2m,precipitation,wind_speed_10m&timezone=auto`;
 
   try {
     const response = await fetch(url);
     const data = await response.json();
-    displayForecast(data, lat, lon);
+    displayForecast(data, model);
   } catch (err) {
     document.getElementById("content").innerHTML = "Error fetching forecast.";
   }
 }
 
-/* ================================
-   DISPLAY FORECAST + CHARTS
-================================ */
-function displayForecast(data, lat, lon) {
+/* ===================================
+   DISPLAY FORECAST
+=================================== */
+function displayForecast(data, model) {
 
   const times = data.hourly.time.slice(0, 48);
   const temps = data.hourly.temperature_2m.slice(0, 48);
@@ -123,28 +167,24 @@ function displayForecast(data, lat, lon) {
 
   document.getElementById("content").innerHTML = `
     <strong>Location:</strong><br>
-    ${lat.toFixed(2)}, ${lon.toFixed(2)}<br><br>
-    <strong>Model:</strong> GFS (Open-Meteo)<br>
-    <strong>Resolution:</strong> ~0.25°<br>
-    <strong>Forecast Window:</strong> Next 48h
+    ${lastLat.toFixed(2)}, ${lastLon.toFixed(2)}<br><br>
+    <strong>Model:</strong> ${model.label}<br>
+    <strong>Resolution:</strong> ${model.resolution}<br>
+    <strong>Window:</strong> Next 48h
   `;
 
-  // Destroy old charts safely
   if (tempChart) tempChart.destroy();
   if (precipChart) precipChart.destroy();
 
   const tempCtx = document.getElementById('tempChart').getContext('2d');
   const precipCtx = document.getElementById('precipChart').getContext('2d');
 
-  /* ================================
-     TEMPERATURE CHART
-  ================================= */
   tempChart = new Chart(tempCtx, {
     type: 'line',
     data: {
       labels: times,
       datasets: [{
-        label: 'Temperature (°C)',
+        label: `${model.label} Temperature (°C)`,
         data: temps,
         borderColor: '#ff6b6b',
         backgroundColor: 'rgba(255,107,107,0.15)',
@@ -152,54 +192,43 @@ function displayForecast(data, lat, lon) {
         pointRadius: 0
       }]
     },
-    options: {
-      responsive: true,
-      scales: {
-        x: {
-          ticks: { color: '#aaa', maxTicksLimit: 8 }
-        },
-        y: {
-          ticks: { color: '#aaa' }
-        }
-      },
-      plugins: {
-        legend: {
-          labels: { color: '#ddd' }
-        }
-      }
-    }
+    options: chartOptions()
   });
 
-  /* ================================
-     PRECIPITATION CHART
-  ================================= */
   precipChart = new Chart(precipCtx, {
     type: 'bar',
     data: {
       labels: times,
       datasets: [{
-        label: 'Precipitation (mm)',
+        label: `${model.label} Precipitation (mm)`,
         data: precip,
         backgroundColor: '#4dabf7'
       }]
     },
-    options: {
-      responsive: true,
-      scales: {
-        x: {
-          ticks: { color: '#aaa', maxTicksLimit: 8 }
-        },
-        y: {
-          ticks: { color: '#aaa' }
-        }
+    options: chartOptions()
+  });
+}
+
+/* ===================================
+   SHARED CHART OPTIONS
+=================================== */
+function chartOptions() {
+  return {
+    responsive: true,
+    scales: {
+      x: {
+        ticks: { color: '#aaa', maxTicksLimit: 8 }
       },
-      plugins: {
-        legend: {
-          labels: { color: '#ddd' }
-        }
+      y: {
+        ticks: { color: '#aaa' }
+      }
+    },
+    plugins: {
+      legend: {
+        labels: { color: '#ddd' }
       }
     }
-  });
+  };
 }
 </script>
 
