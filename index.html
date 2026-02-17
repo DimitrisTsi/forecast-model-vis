@@ -8,254 +8,81 @@
 
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 
-<style>
-body { margin:0; background:#0f0f0f; color:#ddd; font-family:system-ui; }
-#map { width:100vw; height:100vh; }
-
-#panel {
-  position:absolute; top:20px; right:20px;
-  width:520px; max-height:90vh;
-  overflow-y:auto;
-  background:rgba(20,20,20,0.96);
-  padding:16px; border-radius:8px;
-}
-
-canvas { margin-top:20px; }
-label { display:block; margin-top:6px; }
-
-input[type=range] { width:100%; }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
+
 <body>
+
+<!-- ===== Welcome Overlay ===== -->
+<div id="welcomeOverlay" class="overlay">
+  <div class="modal">
+    <h1>Welcome to Forecast Model Visualizer</h1>
+    <p>
+      Click anywhere on the map to load forecast data.<br>
+      Compare models in the chart panel.<br>
+      Use the slider to explore forecast hours spatially.
+    </p>
+    <button id="startBtn">Get Started</button>
+  </div>
+</div>
+
+<!-- ===== About Overlay ===== -->
+<div id="aboutOverlay" class="overlay hidden">
+  <div class="modal">
+    <h2>About This Tool</h2>
+    <p>
+      This application visualizes numerical weather prediction (NWP) model
+      outputs using Open-Meteo APIs.
+      Spatial fields are sampled dynamically around a clicked location.
+      Chart comparison enables inter-model diagnostics.
+    </p>
+    <button id="closeAboutBtn">Close</button>
+  </div>
+</div>
 
 <div id="map"></div>
 
 <div id="panel">
-<h2>forecast-model-vis</h2>
+  <h2>forecast-model-vis</h2>
+  <button id="aboutBtn">About</button>
 
-<strong>Models (Chart)</strong>
-<label><input type="checkbox" value="gfs" checked> GFS</label>
-<label><input type="checkbox" value="ecmwf" checked> ECMWF</label>
+  <br><br>
 
-<br>
+  <strong>Models (Chart)</strong>
+  <label><input type="checkbox" value="gfs" checked> GFS</label>
+  <label><input type="checkbox" value="ecmwf" checked> ECMWF</label>
 
-<strong>Variable</strong>
-<select id="variableSelect">
-  <option value="temperature_2m">Temperature (°C)</option>
-  <option value="precipitation">Precipitation (mm)</option>
-  <option value="wind_speed_10m">Wind Speed (km/h)</option>
-</select>
+  <br>
 
-<button onclick="resetZoom()">Reset Zoom</button>
+  <strong>Variable</strong>
+  <select id="variableSelect">
+    <option value="temperature_2m">Temperature (°C)</option>
+    <option value="precipitation">Precipitation (mm)</option>
+    <option value="wind_speed_10m">Wind Speed (km/h)</option>
+  </select>
 
-<br><br>
+  <button onclick="resetZoom()">Reset Zoom</button>
 
-<strong>Map Model</strong>
-<select id="mapModelSelect">
-  <option value="gfs">GFS</option>
-  <option value="ecmwf">ECMWF</option>
-</select>
+  <br><br>
 
-<strong>Forecast Hour</strong>
-<input type="range" id="hourSlider" min="0" max="24" value="0">
+  <strong>Map Model</strong>
+  <select id="mapModelSelect">
+    <option value="gfs">GFS</option>
+    <option value="ecmwf">ECMWF</option>
+  </select>
 
-<div id="content">Click map.</div>
+  <strong>Forecast Hour</strong>
+  <input type="range" id="hourSlider" min="0" max="24" value="0">
 
-<canvas id="chart"></canvas>
+  <div id="content">Click map.</div>
+
+  <canvas id="chart"></canvas>
 </div>
 
-<script>
-
-/* ================= MAP ================= */
-const map = new maplibregl.Map({
-  container:'map',
-  style:'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
-  center:[12,50],
-  zoom:4
-});
-map.addControl(new maplibregl.NavigationControl());
-
-let lastLat=null,lastLon=null,chart=null;
-let fieldData=[];
-
-const modelStyles={
-  gfs:{ color:"#ff6b6b" },
-  ecmwf:{ color:"#4dabf7" }
-};
-
-map.on('click',(e)=>{
-  lastLat=e.lngLat.lat;
-  lastLon=e.lngLat.lng;
-  fetchAll();
-  fetchField();
-});
-
-/* ================= FETCH CHART ================= */
-
-document.querySelectorAll("input,select")
-  .forEach(el=>el.addEventListener("change",()=>{ 
-    if(lastLat){ 
-      fetchAll();
-      fetchField();
-    }
-  }));
-
-async function fetchAll(){
-
-  const variable=document.getElementById("variableSelect").value;
-  const selected=Array.from(
-    document.querySelectorAll("input[type=checkbox]:checked")
-  ).map(cb=>cb.value);
-
-  const models=(await Promise.all(
-    selected.map(m=>fetchModel(m,variable))
-  )).filter(r=>r!==null);
-
-  if(models.length===0) return;
-
-  render(models,variable);
-}
-
-async function fetchModel(modelKey,variable){
-
-  let url;
-  if(modelKey==="ecmwf"){
-    url=`https://api.open-meteo.com/v1/ecmwf?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&timezone=UTC`;
-  }else{
-    url=`https://api.open-meteo.com/v1/forecast?latitude=${lastLat}&longitude=${lastLon}&hourly=${variable}&model=gfs&timezone=UTC`;
-  }
-
-  const r=await fetch(url);
-  if(!r.ok) return null;
-  const d=await r.json();
-
-  return {
-    model:modelKey,
-    times:d.hourly.time.map(t=>new Date(t).getTime()),
-    values:d.hourly[variable]
-  };
-}
-
-/* ================= CHART ================= */
-
-function render(models,variable){
-
-  if(chart) chart.destroy();
-
-  const labels=models[0].times.map(t=>{
-    const d=new Date(t);
-    return d.toLocaleString(undefined,{day:'2-digit',hour:'2-digit'});
-  });
-
-  const datasets=models.map(m=>({
-    label:m.model.toUpperCase(),
-    data:m.values,
-    borderColor:modelStyles[m.model].color,
-    tension:0.3,
-    pointRadius:0,
-    fill:false
-  }));
-
-  const ctx=document.getElementById("chart").getContext("2d");
-
-  chart=new Chart(ctx,{
-    type:'line',
-    data:{ labels,datasets },
-    options:{
-      responsive:true,
-      plugins:{
-        zoom:{
-          zoom:{ wheel:{enabled:true}, mode:'x' },
-          pan:{ enabled:true, mode:'x' }
-        }
-      }
-    }
-  });
-}
-
-function resetZoom(){
-  if(chart) chart.resetZoom();
-}
-
-/* ================= FIELD ================= */
-
-async function fetchField(){
-
-  const variable=document.getElementById("variableSelect").value;
-  const model=document.getElementById("mapModelSelect").value;
-  const hour=parseInt(document.getElementById("hourSlider").value);
-
-  const step=0.5;  // grid spacing
-  const size=2;    // degrees around clicked point
-
-  const points=[];
-
-  for(let lat=lastLat-size; lat<=lastLat+size; lat+=step){
-    for(let lon=lastLon-size; lon<=lastLon+size; lon+=step){
-      points.push({lat,lon});
-    }
-  }
-
-  const promises=points.map(async p=>{
-    let url;
-    if(model==="ecmwf"){
-      url=`https://api.open-meteo.com/v1/ecmwf?latitude=${p.lat}&longitude=${p.lon}&hourly=${variable}&timezone=UTC`;
-    }else{
-      url=`https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lon}&hourly=${variable}&model=gfs&timezone=UTC`;
-    }
-    const r=await fetch(url);
-    if(!r.ok) return null;
-    const d=await r.json();
-    return {
-      type:"Feature",
-      geometry:{ type:"Point", coordinates:[p.lon,p.lat]},
-      properties:{ value:d.hourly[variable][hour] }
-    };
-  });
-
-  fieldData=(await Promise.all(promises)).filter(f=>f!==null);
-
-  renderField();
-}
-
-function renderField(){
-
-  if(map.getSource("field")){
-    map.getSource("field").setData({
-      type:"FeatureCollection",
-      features:fieldData
-    });
-  }else{
-    map.addSource("field",{
-      type:"geojson",
-      data:{ type:"FeatureCollection", features:fieldData }
-    });
-
-    map.addLayer({
-      id:"fieldLayer",
-      type:"circle",
-      source:"field",
-      paint:{
-        "circle-radius":6,
-        "circle-color":[
-          "interpolate",
-          ["linear"],
-          ["get","value"],
-          -10,"#2c7bb6",
-          0,"#abd9e9",
-          10,"#ffffbf",
-          20,"#fdae61",
-          30,"#d7191c"
-        ],
-        "circle-opacity":0.7
-      }
-    });
-  }
-}
-
-</script>
+<script src="script.js"></script>
 </body>
 </html>
