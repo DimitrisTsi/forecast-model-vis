@@ -1,86 +1,156 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>forecast-model-vis</title>
-
-<link rel="icon" href="data:,">
-
-<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.css" rel="stylesheet" />
-<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@3.6.1/dist/maplibre-gl.js"></script>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forecast Model Visualizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
-
 <body>
 
-<!-- ===== Welcome Overlay ===== -->
+<!-- Welcome Overlay -->
 <div id="welcomeOverlay" class="overlay">
   <div class="modal">
-    <h1>Welcome to Forecast Model Visualizer</h1>
-    <p>
-      Click anywhere on the map to load forecast data.<br>
-      Compare models in the chart panel.<br>
-      Use the slider to explore forecast hours spatially.
-    </p>
-    <button id="startBtn">Get Started</button>
+    <div class="modal-icon">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#5BA3E0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/>
+      </svg>
+    </div>
+    <h1>Forecast Model Visualizer</h1>
+    <p>Interactive NWP model comparison with animated wind flows, spatial field rendering, and professional meteograms. Click anywhere on the map to begin.</p>
+    <button id="startBtn" class="btn-primary">Explore</button>
   </div>
 </div>
 
-<!-- ===== About Overlay ===== -->
+<!-- About Overlay -->
 <div id="aboutOverlay" class="overlay hidden">
   <div class="modal">
     <h2>About This Tool</h2>
-    <p>
-      This application visualizes numerical weather prediction (NWP) model
-      outputs using Open-Meteo APIs.
-      Spatial fields are sampled dynamically around a clicked location.
-      Chart comparison enables inter-model diagnostics.
-    </p>
-    <button id="closeAboutBtn">Close</button>
+    <p>This application visualizes numerical weather prediction (NWP) model outputs using the Open-Meteo API. Features include:</p>
+    <ul style="text-align:left;margin:1rem 0;color:#aab;padding-left:1.2rem;font-size:14px;line-height:1.8;">
+      <li>Animated wind particle flow visualization</li>
+      <li>Interpolated spatial field rendering with meteorological color scales</li>
+      <li>GFS vs ECMWF model comparison</li>
+      <li>Professional meteogram with temperature, precipitation, and wind</li>
+      <li>Wind barb notation on the map</li>
+      <li>Forecast hour animation</li>
+    </ul>
+    <p style="font-size:12px;color:#667;">Data source: Open-Meteo API (CC BY 4.0)</p>
+    <button id="closeAboutBtn" class="btn-secondary">Close</button>
   </div>
 </div>
 
-<div id="map"></div>
+<!-- Map Container -->
+<div id="mapWrap">
+  <div id="map"></div>
+  <canvas id="fieldCanvas"></canvas>
+  <canvas id="particleCanvas"></canvas>
+</div>
 
-<div id="panel">
-  <h2>forecast-model-vis</h2>
-  <button id="aboutBtn">About</button>
+<!-- Legend -->
+<div id="legend" class="legend hidden">
+  <div class="legend-title" id="legendTitle">Temperature (°C)</div>
+  <canvas id="legendBar" width="240" height="16"></canvas>
+  <div class="legend-labels" id="legendLabels"></div>
+</div>
 
-  <br><br>
+<!-- Side Panel -->
+<div id="panel" class="panel">
+  <div class="panel-header">
+    <span class="panel-title">Forecast Data</span>
+    <div class="panel-actions">
+      <button id="aboutBtn" class="icon-btn" title="About">&#9432;</button>
+      <button id="togglePanel" class="icon-btn" title="Collapse">&#9654;</button>
+    </div>
+  </div>
 
-  <strong>Models (Chart)</strong>
-  <label><input type="checkbox" value="gfs" checked> GFS</label>
-  <label><input type="checkbox" value="ecmwf" checked> ECMWF</label>
+  <div id="panelContent" class="panel-content">
+    <!-- Location -->
+    <div id="locationInfo" class="location-info">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+      <span id="locText">Click map to load data</span>
+    </div>
 
-  <br>
+    <!-- Variable -->
+    <div class="control-group">
+      <label>Variable</label>
+      <select id="variableSelect">
+        <option value="temperature_2m">Temperature (°C)</option>
+        <option value="precipitation">Precipitation (mm)</option>
+        <option value="wind_speed_10m">Wind Speed (km/h)</option>
+        <option value="relative_humidity_2m">Rel. Humidity (%)</option>
+        <option value="surface_pressure">Surface Pressure (hPa)</option>
+        <option value="cloud_cover">Cloud Cover (%)</option>
+      </select>
+    </div>
 
-  <strong>Variable</strong>
-  <select id="variableSelect">
-    <option value="temperature_2m">Temperature (°C)</option>
-    <option value="precipitation">Precipitation (mm)</option>
-    <option value="wind_speed_10m">Wind Speed (km/h)</option>
-  </select>
+    <!-- Chart Models -->
+    <div class="control-group">
+      <label>Chart Models</label>
+      <div class="checkbox-row">
+        <label class="cb-label"><input type="checkbox" value="gfs" checked><span class="cb-dot" style="background:#ff6b6b"></span>GFS</label>
+        <label class="cb-label"><input type="checkbox" value="ecmwf" checked><span class="cb-dot" style="background:#4dabf7"></span>ECMWF</label>
+      </div>
+    </div>
 
-  <button onclick="resetZoom()">Reset Zoom</button>
+    <!-- Field Model -->
+    <div class="control-group">
+      <label>Field Model</label>
+      <select id="mapModelSelect">
+        <option value="gfs">GFS</option>
+        <option value="ecmwf">ECMWF</option>
+      </select>
+    </div>
 
-  <br><br>
+    <!-- Forecast Hour -->
+    <div class="control-group">
+      <div class="label-row">
+        <label>Forecast Hour</label>
+        <span class="hour-badge" id="hourValue">+0 h</span>
+      </div>
+      <input type="range" id="hourSlider" min="0" max="90" value="0" step="1">
+      <div class="play-row">
+        <button id="playBtn" class="btn-sm">&#9654; Animate</button>
+        <button id="stopBtn" class="btn-sm" disabled>&#9632; Stop</button>
+        <label class="speed-label">Speed
+          <select id="speedSelect">
+            <option value="800">0.5x</option>
+            <option value="400" selected>1x</option>
+            <option value="200">2x</option>
+          </select>
+        </label>
+      </div>
+    </div>
 
-  <strong>Map Model</strong>
-  <select id="mapModelSelect">
-    <option value="gfs">GFS</option>
-    <option value="ecmwf">ECMWF</option>
-  </select>
+    <!-- Meteogram -->
+    <div class="meteogram-section">
+      <div class="section-label">Meteogram</div>
+      <div class="meteogram-wrap">
+        <canvas id="meteogram" width="460" height="260"></canvas>
+      </div>
+    </div>
 
-  <strong>Forecast Hour</strong>
-  <input type="range" id="hourSlider" min="0" max="24" value="0">
+    <!-- Layer toggles -->
+    <div class="control-group">
+      <label>Map Layers</label>
+      <div class="checkbox-row">
+        <label class="cb-label"><input type="checkbox" id="showParticles" checked>Wind Flow</label>
+        <label class="cb-label"><input type="checkbox" id="showField" checked>Color Field</label>
+        <label class="cb-label"><input type="checkbox" id="showBarbs" checked>Wind Barbs</label>
+      </div>
+    </div>
+  </div>
+</div>
 
-  <div id="content">Click map.</div>
-
-  <canvas id="chart"></canvas>
+<!-- Loading -->
+<div id="loading" class="loading hidden">
+  <div class="spinner"></div>
+  <span id="loadingText">Loading field data&hellip;</span>
 </div>
 
 <script src="script.js"></script>
