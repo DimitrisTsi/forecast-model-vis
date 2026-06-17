@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forecast Model Visualizer</title>
+<title>European Forecast Model Visualizer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
@@ -13,17 +13,25 @@
 </head>
 <body>
 
-<!-- Welcome Overlay -->
+<!-- Welcome / Loading Overlay -->
 <div id="welcomeOverlay" class="overlay">
   <div class="modal">
-    <div class="modal-icon">
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#5BA3E0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/>
-      </svg>
+    <div id="welcomeContent">
+      <div class="modal-icon">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#5BA3E0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9z"/>
+        </svg>
+      </div>
+      <h1>European Forecast Visualizer</h1>
+      <p>Interactive NWP model comparison with animated wind flows, spatial field rendering, and professional meteograms across Europe.</p>
+      <button id="startBtn" class="btn-primary">Load Forecast</button>
     </div>
-    <h1>Forecast Model Visualizer</h1>
-    <p>Interactive NWP model comparison with animated wind flows, spatial field rendering, and professional meteograms. Click anywhere on the map to begin.</p>
-    <button id="startBtn" class="btn-primary">Explore</button>
+    <div id="loadingContent" class="hidden">
+      <div class="spinner-lg"></div>
+      <h2>Loading European Forecast</h2>
+      <p id="loadingProgress">Initializing&hellip;</p>
+      <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
+    </div>
   </div>
 </div>
 
@@ -31,13 +39,14 @@
 <div id="aboutOverlay" class="overlay hidden">
   <div class="modal">
     <h2>About This Tool</h2>
-    <p>This application visualizes numerical weather prediction (NWP) model outputs using the Open-Meteo API. Features include:</p>
+    <p>Europe-wide numerical weather prediction (NWP) model visualizer using the Open-Meteo API. Features include:</p>
     <ul style="text-align:left;margin:1rem 0;color:#aab;padding-left:1.2rem;font-size:14px;line-height:1.8;">
+      <li>Europe-wide interpolated spatial field rendering</li>
       <li>Animated wind particle flow visualization</li>
-      <li>Interpolated spatial field rendering with meteorological color scales</li>
+      <li>Meteorological color scales (temperature, precipitation, wind, humidity, pressure, cloud cover)</li>
       <li>GFS vs ECMWF model comparison</li>
-      <li>Professional meteogram with temperature, precipitation, and wind</li>
-      <li>Wind barb notation on the map</li>
+      <li>Professional meteogram (click any point)</li>
+      <li>Wind barb notation</li>
       <li>Forecast hour animation</li>
     </ul>
     <p style="font-size:12px;color:#667;">Data source: Open-Meteo API (CC BY 4.0)</p>
@@ -45,7 +54,7 @@
   </div>
 </div>
 
-<!-- Map Container -->
+<!-- Map & Canvases -->
 <div id="mapWrap">
   <div id="map"></div>
   <canvas id="fieldCanvas"></canvas>
@@ -59,10 +68,16 @@
   <div class="legend-labels" id="legendLabels"></div>
 </div>
 
+<!-- Date Badge -->
+<div id="dateBadge" class="date-badge hidden">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+  <span id="dateText">—</span>
+</div>
+
 <!-- Side Panel -->
 <div id="panel" class="panel">
   <div class="panel-header">
-    <span class="panel-title">Forecast Data</span>
+    <span class="panel-title">Forecast</span>
     <div class="panel-actions">
       <button id="aboutBtn" class="icon-btn" title="About">&#9432;</button>
       <button id="togglePanel" class="icon-btn" title="Collapse">&#9654;</button>
@@ -70,11 +85,6 @@
   </div>
 
   <div id="panelContent" class="panel-content">
-    <!-- Location -->
-    <div id="locationInfo" class="location-info">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-      <span id="locText">Click map to load data</span>
-    </div>
 
     <!-- Variable -->
     <div class="control-group">
@@ -89,18 +99,9 @@
       </select>
     </div>
 
-    <!-- Chart Models -->
-    <div class="control-group">
-      <label>Chart Models</label>
-      <div class="checkbox-row">
-        <label class="cb-label"><input type="checkbox" value="gfs" checked><span class="cb-dot" style="background:#ff6b6b"></span>GFS</label>
-        <label class="cb-label"><input type="checkbox" value="ecmwf" checked><span class="cb-dot" style="background:#4dabf7"></span>ECMWF</label>
-      </div>
-    </div>
-
     <!-- Field Model -->
     <div class="control-group">
-      <label>Field Model</label>
+      <label>Model</label>
       <select id="mapModelSelect">
         <option value="gfs">GFS</option>
         <option value="ecmwf">ECMWF</option>
@@ -110,12 +111,12 @@
     <!-- Forecast Hour -->
     <div class="control-group">
       <div class="label-row">
-        <label>Forecast Hour</label>
+        <label>Forecast</label>
         <span class="hour-badge" id="hourValue">+0 h</span>
       </div>
       <input type="range" id="hourSlider" min="0" max="90" value="0" step="1">
       <div class="play-row">
-        <button id="playBtn" class="btn-sm">&#9654; Animate</button>
+        <button id="playBtn" class="btn-sm">&#9654; Play</button>
         <button id="stopBtn" class="btn-sm" disabled>&#9632; Stop</button>
         <label class="speed-label">Speed
           <select id="speedSelect">
@@ -127,30 +128,30 @@
       </div>
     </div>
 
-    <!-- Meteogram -->
-    <div class="meteogram-section">
-      <div class="section-label">Meteogram</div>
-      <div class="meteogram-wrap">
-        <canvas id="meteogram" width="460" height="260"></canvas>
+    <!-- Layer toggles -->
+    <div class="control-group">
+      <label>Layers</label>
+      <div class="checkbox-row">
+        <label class="cb-label"><input type="checkbox" id="showField" checked>Color Field</label>
+        <label class="cb-label"><input type="checkbox" id="showBarbs" checked>Wind Barbs</label>
+        <label class="cb-label"><input type="checkbox" id="showParticles" checked>Wind Flow</label>
       </div>
     </div>
 
-    <!-- Layer toggles -->
-    <div class="control-group">
-      <label>Map Layers</label>
-      <div class="checkbox-row">
-        <label class="cb-label"><input type="checkbox" id="showParticles" checked>Wind Flow</label>
-        <label class="cb-label"><input type="checkbox" id="showField" checked>Color Field</label>
-        <label class="cb-label"><input type="checkbox" id="showBarbs" checked>Wind Barbs</label>
+    <!-- Meteogram (shown on click) -->
+    <div class="meteogram-section hidden" id="meteogramSection">
+      <div class="section-label">Meteogram <span id="meteogramLoc"></span></div>
+      <div class="meteogram-wrap">
+        <canvas id="meteogram" width="460" height="260"></canvas>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Loading -->
-<div id="loading" class="loading hidden">
+<!-- Inline loading for model switch -->
+<div id="loadingInline" class="loading hidden">
   <div class="spinner"></div>
-  <span id="loadingText">Loading field data&hellip;</span>
+  <span id="loadingInlineText">Loading model…</span>
 </div>
 
 <script src="script.js"></script>
